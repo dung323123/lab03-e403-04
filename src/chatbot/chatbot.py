@@ -12,11 +12,7 @@ from src.tools import (
 )
 from src.telemetry.logger import logger
 
-<<<<<<< HEAD
 ITEM_ALIAS_PATTERN = r"\b(GA\d+|BURGER|FRIES|PEPSI|SALAD|NUGGETS|CHEESE_BALLS)\b"
-=======
-
->>>>>>> 3acbcae (modify system prompt of chatbot baseline to make it not answer out of domain question)
 
 
 class RestaurantChatbot:
@@ -30,17 +26,11 @@ class RestaurantChatbot:
     """
 
     SYSTEM_PROMPT = """Bạn là chatbot của nhà hàng gà rán tại Hà Nội.
-<<<<<<< HEAD
 
 Khi có dữ liệu tool trong hội thoại, bắt buộc ưu tiên dữ liệu đó để trả lời chính xác.
 Không bịa thêm món, giá hoặc combo ngoài dữ liệu tool.
 
 Trả lời ngắn gọn, đúng trọng tâm, lịch sự bằng tiếng Việt."""
-=======
-# Chỉ trả lời các câu hỏi liên quan đến thực đơn, giá cả, combo, mã giảm giá và đặt hàng.
-# Với câu hỏi ngoài phạm vi (thời tiết, tin tức, v.v.) hãy từ chối lịch sự.
-Trả lời ngắn gọn, lịch sự bằng tiếng Việt."""
->>>>>>> 3acbcae (modify system prompt of chatbot baseline to make it not answer out of domain question)
 
     def __init__(self, llm: LLMProvider):
         self.llm = llm
