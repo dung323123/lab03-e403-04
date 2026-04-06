@@ -22,6 +22,11 @@ class ReActAgent:
         self.max_steps = max_steps
         self.version = version
         self.history = []
+        self.last_trace = []
+        self.last_tokens = 0
+        self.last_latency = 0
+        self.last_cost = 0.0
+        self.last_ratio = 0.0
 
     def get_system_prompt(self) -> str:
         """
@@ -84,11 +89,23 @@ class ReActAgent:
         scratchpad: List[str] = []
         steps = 0
         final_answer = ""
+        total_tokens = 0
+        total_latency = 0
+        total_cost = 0.0
+        total_prompt = 0
+        total_completion = 0
 
         while steps < self.max_steps:
             current_prompt = self._build_prompt(user_input, scratchpad)
             result = self.llm.generate(current_prompt, system_prompt=self.get_system_prompt())
             content = result.get("content", "").strip()
+            
+            total_tokens += result.get("usage", {}).get("total_tokens", 0)
+            total_prompt += result.get("usage", {}).get("prompt_tokens", 0)
+            total_completion += result.get("usage", {}).get("completion_tokens", 0)
+            total_cost += result.get("cost", 0.0)
+            if result.get("latency_ms"):
+                total_latency += result.get("latency_ms")
 
             logger.log_event(
                 "AGENT_STEP",
@@ -133,6 +150,13 @@ class ReActAgent:
         self.history.append({"role": "user", "content": user_input})
         self.history.append({"role": "assistant", "content": final_answer})
 
+        self.last_trace = scratchpad.copy()
+        self.last_tokens = total_tokens
+        self.last_latency = total_latency
+        self.last_cost = total_cost
+        from src.core.metrics import calculate_token_ratio
+        self.last_ratio = calculate_token_ratio(total_prompt, total_completion)
+
         logger.log_event("AGENT_END", {"steps": steps, "final_answer": final_answer})
         return final_answer
 
@@ -148,6 +172,11 @@ class ReActAgent:
         scratchpad: List[str] = []
         steps = 0
         final_answer = ""
+        total_tokens = 0
+        total_latency = 0
+        total_cost = 0.0
+        total_prompt = 0
+        total_completion = 0
         latest_observations: Dict[str, Dict[str, Any]] = {}
 
         # Ground likely facts early to reduce hallucination risk.
@@ -163,6 +192,13 @@ class ReActAgent:
             current_prompt = self._build_prompt(user_input, scratchpad)
             result = self.llm.generate(current_prompt, system_prompt=self.get_system_prompt())
             content = result.get("content", "").strip()
+
+            total_tokens += result.get("usage", {}).get("total_tokens", 0)
+            total_prompt += result.get("usage", {}).get("prompt_tokens", 0)
+            total_completion += result.get("usage", {}).get("completion_tokens", 0)
+            total_cost += result.get("cost", 0.0)
+            if result.get("latency_ms"):
+                total_latency += result.get("latency_ms")
 
             logger.log_event(
                 "AGENT_STEP",
@@ -207,6 +243,13 @@ class ReActAgent:
 
         self.history.append({"role": "user", "content": user_input})
         self.history.append({"role": "assistant", "content": final_answer})
+
+        self.last_trace = scratchpad.copy()
+        self.last_tokens = total_tokens
+        self.last_latency = total_latency
+        self.last_cost = total_cost
+        from src.core.metrics import calculate_token_ratio
+        self.last_ratio = calculate_token_ratio(total_prompt, total_completion)
 
         logger.log_event("AGENT_END", {"steps": steps, "final_answer": final_answer})
         return final_answer
