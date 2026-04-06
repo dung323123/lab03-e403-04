@@ -40,6 +40,7 @@ class ReActAgent:
         if self.version == "v2":
             extra_rules = """
     Rules:
+    - Khi khách hỏi món nhưng tên sai/thiếu chữ, BẮT BUỘC dùng Action: get_all_items() trước để tra cứu tên/ID món chuẩn.
     - Chỉ được gọi đúng tên tool đã cung cấp.
     - Mỗi bước chỉ dùng tối đa 1 Action.
     - Nếu đã đủ dữ liệu, trả lời ngay bằng Final Answer.
@@ -50,6 +51,7 @@ class ReActAgent:
             extra_rules = """
     Rules:
     - Dùng tool khi cần dữ liệu thực tế (món ăn, combo, freeship, best seller).
+    - Khi khách hỏi món nhưng tên sai/thiếu chữ, BẮT BUỘC dùng Action: get_all_items() trước để tra cứu.
     - Khi có Observation đủ thông tin thì chốt Final Answer.
     - Nhà hàng chỉ giao trong Hà Nội. Không xác nhận giao hàng ngoài Hà Nội.
     """
@@ -147,8 +149,24 @@ class ReActAgent:
                 "Bạn vui lòng cung cấp thêm chi tiết (tên món/mã combo/tổng tiền/thành phố) để mình xử lý chính xác hơn."
             )
 
-        self.history.append({"role": "user", "content": user_input})
-        self.history.append({"role": "assistant", "content": final_answer})
+        from src.core.metrics import calculate_token_ratio
+        ratio = calculate_token_ratio(total_prompt, total_completion)
+
+        self.history.append({
+            "role": "user", 
+            "content": user_input
+        })
+        self.history.append({
+            "role": "assistant", 
+            "content": final_answer,
+            "trace": scratchpad.copy(),
+            "metrics": {
+                "tokens": total_tokens,
+                "latency": total_latency,
+                "cost": total_cost,
+                "ratio": ratio
+            }
+        })
 
         self.last_trace = scratchpad.copy()
         self.last_tokens = total_tokens
@@ -241,8 +259,24 @@ class ReActAgent:
 
         final_answer = self._enforce_business_rules_v2(final_answer, latest_observations, user_input)
 
-        self.history.append({"role": "user", "content": user_input})
-        self.history.append({"role": "assistant", "content": final_answer})
+        from src.core.metrics import calculate_token_ratio
+        ratio = calculate_token_ratio(total_prompt, total_completion)
+
+        self.history.append({
+            "role": "user", 
+            "content": user_input
+        })
+        self.history.append({
+            "role": "assistant", 
+            "content": final_answer,
+            "trace": scratchpad.copy(),
+            "metrics": {
+                "tokens": total_tokens,
+                "latency": total_latency,
+                "cost": total_cost,
+                "ratio": ratio
+            }
+        })
 
         self.last_trace = scratchpad.copy()
         self.last_tokens = total_tokens

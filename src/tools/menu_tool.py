@@ -117,6 +117,33 @@ def get_item(
 
 
 # =========================
+# 1.5) get_all_items()
+# =========================
+
+def get_all_items(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Lấy danh sách tóm tắt toàn bộ các món ăn.
+    """
+    try:
+        data = _coerce_data(data)
+    except ValueError as exc:
+        return {"success": False, "message": str(exc)}
+
+    results = []
+    for item in data.get("items", []):
+        results.append({
+            "id": item.get("id"),
+            "name_vi": item.get("name_vi"),
+            "price": item.get("price"),
+            "category_vi": item.get("category_vi"),
+            "available": item.get("available", False)
+        })
+
+    return {"success": True, "count": len(results), "items": results}
+
+
+
+# =========================
 # 2) get_combo()
 # =========================
 

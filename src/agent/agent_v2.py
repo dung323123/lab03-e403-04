@@ -28,6 +28,7 @@ class ReActAgent:
         self.tools = tools
         self.max_steps = max_steps
         self.trace_enabled = trace_enabled
+        self.history: List[Dict[str, str]] = []
         self.last_trace: List[Dict[str, Any]] = []
         self.last_tokens = 0
         self.last_latency = 0
@@ -48,6 +49,7 @@ Bạn có các công cụ sau:
 {tool_descriptions}
 
 Quy tắc xử lý đơn hàng:
+- BẮT BUỘC dùng tool get_all_items() trước để lấy danh sách tất cả món ăn nội bộ. Lấy tên chuẩn từ danh sách đó để dùng cho các tool khác thay vì tự đoán sai.
 - Khi khách hỏi mua/đặt hoặc hỏi giá, luôn dùng tool để tính.
 - Luôn kiểm tra tồn kho và luôn kiểm tra mã giảm giá khả dụng.
 - Nếu có mã giảm giá hợp lệ, chỉ áp dụng 1 mã tốt nhất.
@@ -117,8 +119,14 @@ Quy tắc xử lý đơn hàng:
 
         messages = [
             {"role": "system", "content": self.get_system_prompt().strip()},
-            {"role": "user", "content": user_input},
         ]
+        
+        # Append all previous conversation history
+        for h in self.history:
+            messages.append({"role": h["role"], "content": h["content"]})
+            
+        # Append current input
+        messages.append({"role": "user", "content": user_input})
 
         for step in range(self.max_steps):
             start_time = time.time()
@@ -189,7 +197,11 @@ Quy tắc xử lý đơn hàng:
                 self.last_cost = calculate_cost(self.llm.model_name, total_prompt, total_completion)
                 self.last_ratio = calculate_token_ratio(total_prompt, total_completion)
 
-                return msg.content.strip()
+                final_answer = msg.content.strip()
+                self.history.append({"role": "user", "content": user_input})
+                self.history.append({"role": "assistant", "content": final_answer})
+
+                return final_answer
 
         logger.log_event("AGENT_END", {"steps": self.max_steps, "reason": "max_steps"})
         
@@ -198,7 +210,11 @@ Quy tắc xử lý đơn hàng:
         self.last_cost = calculate_cost(self.llm.model_name, total_prompt, total_completion)
         self.last_ratio = calculate_token_ratio(total_prompt, total_completion)
 
-        return "Xin lỗi, mình chưa thể hoàn thành yêu cầu trong số bước cho phép."
+        final_answer = "Xin lỗi, mình chưa thể hoàn thành yêu cầu trong số bước cho phép."
+        self.history.append({"role": "user", "content": user_input})
+        self.history.append({"role": "assistant", "content": final_answer})
+        
+        return final_answer
 
 
 class OpenAIFunctionAgent:
@@ -238,6 +254,29 @@ class OpenAIFunctionAgent:
 
 def _build_menu_tools(data_path: str) -> List[Dict[str, Any]]:
     tools = []
+
+    tools.append(
+        {
+            "name": "get_all_items",
+            "description": "Lấy danh sách thông tin tóm tắt của toàn bộ các món ăn trong menu. Rất hữu ích khi cần lấy chính xác tên món ăn nếu thấy user gõ sai chính tả hoặc không đầy đủ tên.",
+            "func": menu_tool.get_all_items,
+            "data": data_path,
+            "schema": {
+                "type": "function",
+                "function": {
+                    "name": "get_all_items",
+                    "description": "Lấy danh sách thông tin tóm tắt của toàn bộ các món ăn trong menu.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                },
+            },
+        }
+    )
 
     tools.append(
         {

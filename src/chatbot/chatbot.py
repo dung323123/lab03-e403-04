@@ -239,7 +239,16 @@ Trả lời ngắn gọn, đúng trọng tâm, lịch sự bằng tiếng Việt
         self.last_cost = result.get("cost", 0.0)
         self.last_ratio = result.get("token_ratio", 0.0)
 
-        self.history.append({"role": "assistant", "content": response})
+        self.history.append({
+            "role": "assistant", 
+            "content": response,
+            "metrics": {
+                "tokens": self.last_tokens,
+                "latency": self.last_latency,
+                "cost": self.last_cost,
+                "ratio": self.last_ratio
+            }
+        })
         logger.log_event("CHATBOT_RESPONSE", {
             "input": user_message,
             "output": response,
