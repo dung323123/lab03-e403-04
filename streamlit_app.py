@@ -1,5 +1,5 @@
 """
-Streamlit UI for Restaurant Chatbot vs ReAct Agent comparison.
+Streamlit UI for Restaurant Chatbot vs ReAct Agent comparison with Monitoring.
 
 Usage:
     streamlit run streamlit_app.py
@@ -16,7 +16,9 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.chatbot.chatbot import RestaurantChatbot
-from src.agent.agent import ReActAgent
+from src.agent.agent import ReActAgent as ReActAgentCustom
+from src.agent.agent_v2 import ReActAgent as ReActAgentV2
+from src.agent.agent_v2 import _build_menu_tools
 from src.tools import TOOL_REGISTRY
 
 
@@ -53,21 +55,35 @@ def main():
     )
 
     st.title("🍗 Nhà hàng Gà Rán - Chatbot vs ReAct Agent")
-    st.markdown(
-        "So sánh câu trả lời giữa Chatbot thường và ReAct Agent (v1/v2)"
-    )
+
+    # Global tracking session state
+    if "global_metrics" not in st.session_state:
+        st.session_state.global_metrics = {
+            "total_cost": 0.0,
+            "total_tokens": 0,
+            "queries": 0,
+        }
 
     # Sidebar configuration
     st.sidebar.header("⚙️ Cấu hình")
+    
+    app_mode = st.sidebar.radio(
+        "Chế độ hiển thị (Mode):",
+        ["Chat", "Monitor"]
+    )
+
     provider_name = st.sidebar.selectbox(
         "Chọn LLM Provider:",
         ["openai", "google", "local"],
         index=0,
     )
     
-    agent_version = st.sidebar.selectbox(
+    agent_selection = st.sidebar.selectbox(
         "Chọn phiên bản Agent:",
-        ["agent_v1", "agent_v2"],
+        [
+            "Agent (agent.py)",
+            "Agent V2 - OpenAI Tools (agent_v2.py)"
+        ],
         index=0,
     )
 
@@ -75,21 +91,40 @@ def main():
     st.sidebar.markdown(
         "💡 **Lưu ý:**\n"
         "- Chatbot dùng tool data nhưng không suy luận đa bước\n"
-        "- Agent v1 là baseline ReAct loop\n"
-        "- Agent v2 là cải tiến với grounding + guard\n"
+        "- Agent (agent.py) là ReAct loop tự xây với Thought/Action/Observation\n"
+        "- Agent V2 (agent_v2.py) sử dụng OpenAI Function Calling (Chỉ hỗ trợ OpenAI)\n"
     )
 
-    # Initialize session state
-    if "llm" not in st.session_state:
+    # Force re-init if config changes, or if cached objects are missing new metric attrs (stale session)
+    _stale = (
+        "chatbot" not in st.session_state
+        or not hasattr(st.session_state.get("chatbot"), "last_cost")
+        or "active_agent" not in st.session_state
+        or not hasattr(st.session_state.get("active_agent"), "last_cost")
+    )
+    if _stale or "llm_provider_name" not in st.session_state or st.session_state.llm_provider_name != provider_name or "agent_selection" not in st.session_state or st.session_state.agent_selection != agent_selection:
         try:
             st.session_state.llm = build_provider(provider_name)
             st.session_state.chatbot = RestaurantChatbot(st.session_state.llm)
-            st.session_state.agent = ReActAgent(
-                st.session_state.llm,
-                TOOL_REGISTRY,
-                max_steps=7 if agent_version == "agent_v2" else 5,
-                version=agent_version.replace("agent_", ""),
-            )
+            
+            if agent_selection == "Agent (agent.py)":
+                st.session_state.active_agent = ReActAgentCustom(
+                    st.session_state.llm,
+                    TOOL_REGISTRY,
+                    max_steps=5,
+                    version="v1",
+                )
+            elif agent_selection == "Agent V2 - OpenAI Tools (agent_v2.py)":
+                v2_tools = _build_menu_tools("data/mock_data.json")
+                st.session_state.active_agent = ReActAgentV2(
+                    st.session_state.llm,
+                    v2_tools,
+                    max_steps=6,
+                    trace_enabled=True,
+                )
+            
+            st.session_state.llm_provider_name = provider_name
+            st.session_state.agent_selection = agent_selection
             st.sidebar.success(
                 f"✅ Đã load {provider_name} ({st.session_state.llm.model_name})"
             )
@@ -97,79 +132,95 @@ def main():
             st.sidebar.error(f"❌ Lỗi khi load provider: {e}")
             return
 
-    # Input section
-    st.markdown("### 📝 Nhập câu hỏi")
-    user_input = st.text_area(
-        "Câu hỏi của bạn:",
-        placeholder="Ví dụ: Combo nào rẻ nhất? / Giao hàng được không? / Có voucher nào không?",
-        height=80,
-        key="user_input",
-    )
+    if app_mode == "Chat":
+        st.markdown(
+            "So sánh câu trả lời giữa Chatbot thường và phiên bản Agent được chọn."
+        )
 
-    # Query button
-    col_btn1, col_btn2 = st.columns([1, 4])
-    with col_btn1:
-        run_query = st.button("🚀 Gửi", use_container_width=True)
-    with col_btn2:
-        st.markdown("")
+        # Input section
+        st.markdown("### 📝 Nhập câu hỏi")
+        user_input = st.text_area(
+            "Câu hỏi của bạn:",
+            placeholder="Ví dụ: Combo nào rẻ nhất? / Giao hàng được không? / Có voucher nào không?",
+            height=80,
+            key="user_input",
+        )
 
-    if run_query and user_input.strip():
-        st.markdown("---")
-        st.markdown("### 📊 Kết quả so sánh")
+        # Query button
+        col_btn1, col_btn2 = st.columns([1, 4])
+        with col_btn1:
+            run_query = st.button("🚀 Gửi", use_container_width=True)
 
-        # Run in parallel
-        with st.spinner("⏳ Đang xử lý..."):
-            try:
-                # Chatbot response
-                chatbot_response = st.session_state.chatbot.chat(user_input.strip())
+        if run_query and user_input.strip():
+            st.markdown("---")
+            st.markdown("### 📊 Kết quả so sánh")
+
+            with st.spinner("⏳ Đang xử lý..."):
+                try:
+                    chatbot_response = st.session_state.chatbot.chat(user_input.strip())
+                    agent_response = st.session_state.active_agent.run(user_input.strip())
+                    
+                    # Accumulate Global Metrics
+                    st.session_state.global_metrics["total_tokens"] += st.session_state.chatbot.last_tokens + st.session_state.active_agent.last_tokens
+                    st.session_state.global_metrics["total_cost"] += st.session_state.chatbot.last_cost + st.session_state.active_agent.last_cost
+                    st.session_state.global_metrics["queries"] += 1
+                except Exception as e:
+                    st.error(f"❌ Lỗi khi xử lý: {e}")
+                    return
+
+            # Display results in two columns
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 🤖 Chatbot (Baseline)")
+                st.markdown(
+                    f"""
+    <div style="background-color: #003d99; color: #ffffff; padding: 15px; border-radius: 8px; border-left: 4px solid #0052cc; font-size: 14px; line-height: 1.6;">
+    {chatbot_response}
+    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.markdown(f"**⏱️ Time:** {st.session_state.chatbot.last_latency:.2f} ms | **🪙 Tokens:** {st.session_state.chatbot.last_tokens} | **💵 Cost:** ${st.session_state.chatbot.last_cost:.5f} | **⚖️ Ratio (PMT/TOT):** {st.session_state.chatbot.last_ratio:.2f}")
+
+            with col2:
+                st.markdown(f"#### 🧠 {agent_selection}")
+                st.markdown(
+                    f"""
+    <div style="background-color: #1a6d1a; color: #ffffff; padding: 15px; border-radius: 8px; border-left: 4px solid #33a333; font-size: 14px; line-height: 1.6;">
+    {agent_response}
+    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.markdown(f"**⏱️ Time:** {st.session_state.active_agent.last_latency:.2f} ms | **🪙 Tokens:** {st.session_state.active_agent.last_tokens} | **💵 Cost:** ${st.session_state.active_agent.last_cost:.5f} | **⚖️ Ratio (PMT/TOT):** {st.session_state.active_agent.last_ratio:.2f}")
                 
-                # Agent response
-                agent_response = st.session_state.agent.run(user_input.strip())
+                with st.expander("🛠️ Xem Trace"):
+                    if hasattr(st.session_state.active_agent, 'last_trace'):
+                        if agent_selection == "Agent OpenAI Tools (agent_v2.py)":
+                            for idx, t in enumerate(st.session_state.active_agent.last_trace):
+                                st.markdown(f"**Bước {idx + 1}:**")
+                                st.json(t)
+                        else:
+                            for t in st.session_state.active_agent.last_trace:
+                                st.text(t)
 
-            except Exception as e:
-                st.error(f"❌ Lỗi khi xử lý: {e}")
-                return
+            # Reset chatbot state for next conversation
+            st.session_state.chatbot.history = []
 
-        # Display results in two columns
-        col1, col2 = st.columns(2)
+        elif run_query and not user_input.strip():
+            st.warning("⚠️ Vui lòng nhập một câu hỏi.")
 
-        with col1:
-            st.markdown("#### 🤖 Chatbot (Baseline)")
-            st.markdown(
-                f"""
-<div style="background-color: #003d99; color: #ffffff; padding: 15px; border-radius: 8px; border-left: 4px solid #0052cc; font-size: 14px; line-height: 1.6;">
-{chatbot_response}
-</div>
-                """,
-                unsafe_allow_html=True,
-            )
+    elif app_mode == "Monitor":
+        st.markdown("## 📈 Global Metrics Dashboard (Monitor)")
+        st.markdown("Theo dõi chi phí và số lượng token hệ thống đã sử dụng trong phiên làm việc (session) hiện tại.")
 
-        with col2:
-            st.markdown(f"#### 🧠 Agent ({agent_version.upper()})")
-            st.markdown(
-                f"""
-<div style="background-color: #1a6d1a; color: #ffffff; padding: 15px; border-radius: 8px; border-left: 4px solid #33a333; font-size: 14px; line-height: 1.6;">
-{agent_response}
-</div>
-                """,
-                unsafe_allow_html=True,
-            )
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Tokens Processed", f"{st.session_state.global_metrics['total_tokens']:,}")
+        col2.metric("Total Estimated Cost (USD)", f"${st.session_state.global_metrics['total_cost']:.5f}")
+        col3.metric("Successful Queries Executed", st.session_state.global_metrics['queries'])
 
-        # Analysis section
-        st.markdown("---")
-        st.markdown("### 🔍 Nhận xét")
-        
-        is_same = chatbot_response.strip() == agent_response.strip()
-        if is_same:
-            st.info("✅ Chatbot và Agent có câu trả lời giống nhau.")
-        else:
-            st.warning("⚠️ Chatbot và Agent có câu trả lời khác nhau. Kiểm tra lý do tại log hoặc phân tích sự khác biệt.")
-
-        # Reset chatbot state for next conversation
-        st.session_state.chatbot.history = []
-
-    elif run_query and not user_input.strip():
-        st.warning("⚠️ Vui lòng nhập một câu hỏi.")
+        st.info("Các số liệu bên trên được tích luỹ cho cả Chatbot và Agent sau mỗi lần Gửi truy vấn thành công.")
 
     # Footer
     st.markdown("---")
