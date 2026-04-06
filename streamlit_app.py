@@ -49,7 +49,7 @@ def build_provider(provider_name: str = None):
 
 def main():
     st.set_page_config(
-        page_title="餐廳助手 - Chatbot vs Agent",
+        page_title="Chatbot vs Agent",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -57,11 +57,10 @@ def main():
     st.title("🍗 Nhà hàng Gà Rán - Chatbot vs ReAct Agent")
 
     # Global tracking session state
-    if "global_metrics" not in st.session_state:
+    if "global_metrics" not in st.session_state or "chatbot" not in st.session_state.global_metrics:
         st.session_state.global_metrics = {
-            "total_cost": 0.0,
-            "total_tokens": 0,
-            "queries": 0,
+            "chatbot": {"total_cost": 0.0, "total_tokens": 0, "queries": 0},
+            "agent": {"total_cost": 0.0, "total_tokens": 0, "queries": 0},
         }
 
     # Sidebar configuration
@@ -134,93 +133,118 @@ def main():
 
     if app_mode == "Chat":
         st.markdown(
-            "So sánh câu trả lời giữa Chatbot thường và phiên bản Agent được chọn."
+            "So sánh câu trả lời giữa Chatbot thường và phiên bản Agent được chọn. Lịch sử trò chuyện được lưu trữ toàn phiên."
         )
 
-        # Input section
-        st.markdown("### 📝 Nhập câu hỏi")
-        user_input = st.text_area(
-            "Câu hỏi của bạn:",
-            placeholder="Ví dụ: Combo nào rẻ nhất? / Giao hàng được không? / Có voucher nào không?",
-            height=80,
-            key="user_input",
-        )
+        col1, col2 = st.columns(2)
 
-        # Query button
-        col_btn1, col_btn2 = st.columns([1, 4])
-        with col_btn1:
-            run_query = st.button("🚀 Gửi", use_container_width=True)
-
-        if run_query and user_input.strip():
-            st.markdown("---")
-            st.markdown("### 📊 Kết quả so sánh")
-
-            with st.spinner("⏳ Đang xử lý..."):
-                try:
-                    chatbot_response = st.session_state.chatbot.chat(user_input.strip())
-                    agent_response = st.session_state.active_agent.run(user_input.strip())
+        # Render conversation histories
+        with col1:
+            st.markdown("#### 🤖 Chatbot (Baseline)")
+            for msg in st.session_state.chatbot.history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    if msg["role"] == "assistant" and "metrics" in msg:
+                        m = msg["metrics"]
+                        st.caption(f"**⏱️ Time:** {m['latency']:.2f} ms | **🪙 Tokens:** {m['tokens']} | **💵 Cost:** ${m['cost']:.5f} | **⚖️ Ratio:** {m['ratio']:.2f}")
                     
-                    # Accumulate Global Metrics
-                    st.session_state.global_metrics["total_tokens"] += st.session_state.chatbot.last_tokens + st.session_state.active_agent.last_tokens
-                    st.session_state.global_metrics["total_cost"] += st.session_state.chatbot.last_cost + st.session_state.active_agent.last_cost
-                    st.session_state.global_metrics["queries"] += 1
+        with col2:
+            st.markdown(f"#### 🧠 {agent_selection}")
+            if hasattr(st.session_state.active_agent, "history"):
+                for idx, msg in enumerate(st.session_state.active_agent.history):
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
+                        if msg["role"] == "assistant":
+                            if "metrics" in msg:
+                                m = msg["metrics"]
+                                st.caption(f"**⏱️ Time:** {m['latency']:.2f} ms | **🪙 Tokens:** {m['tokens']} | **💵 Cost:** ${m['cost']:.5f} | **⚖️ Ratio:** {m['ratio']:.2f}")
+
+                            if "trace" in msg and msg["trace"]:
+                                with st.expander(f"🛠️ Xem Trace & Suy Luận (Lượt {idx // 2 + 1})"):
+                                    if agent_selection == "Agent V2 - OpenAI Tools (agent_v2.py)":
+                                        for t_idx, t in enumerate(msg["trace"]):
+                                            st.markdown(f"#### 🔄 Lần gọi Tool {t_idx + 1} (Vòng lặp LLM {t.get('step', '?')})")
+                                            st.markdown(f"**🛠️ Gọi Tool:** `{t.get('action')}`")
+                                            st.markdown("**📥 Tham số (Args):**")
+                                            import json
+                                            st.code(json.dumps(t.get('args', {}), indent=2, ensure_ascii=False), language="json")
+                                            st.markdown("**📤 Kết quả (Observation):**")
+                                            try:
+                                                obs_json = json.loads(t.get('observation', '{}'))
+                                                st.json(obs_json, expanded=False)
+                                            except:
+                                                st.code(t.get('observation', ''), language="json")
+                                            st.divider()
+                                    else:
+                                        step_idx = 1
+                                        import json
+                                        for line in msg["trace"]:
+                                            if line.startswith("Thought:") or line.startswith("Thought :"):
+                                                st.markdown(f"#### 🔄 Bước suy luận {step_idx}")
+                                                step_idx += 1
+                                                st.markdown(f"**🧠 Suy nghĩ:** {line.split(':', 1)[1].strip()}")
+                                            elif line.startswith("Action:") or line.startswith("Action :"):
+                                                st.markdown(f"**🛠️ Hành động:** `{line.split(':', 1)[1].strip()}`")
+                                            elif line.startswith("Observation:") or line.startswith("Observation :"):
+                                                st.markdown("**📤 Kết quả:**")
+                                                obs_text = line.split(':', 1)[1].strip()
+                                                try:
+                                                    st.json(json.loads(obs_text), expanded=False)
+                                                except:
+                                                    st.code(obs_text, language="json")
+                                                st.divider()
+                                            else:
+                                                st.markdown(f"> *{line}*")
+
+        # Chat input element pinning to the bottom of the screen
+        user_input = st.chat_input("Nhập câu hỏi của bạn (VD: Combo nào rẻ nhất? / Giao hàng được không?)")
+
+        if user_input:
+            with st.spinner("⏳ Hệ thống đang xử lý..."):
+                try:
+                    _ = st.session_state.chatbot.chat(user_input.strip())
+                    _ = st.session_state.active_agent.run(user_input.strip())
+                    
+                    # Accumulate Global Metrics (Chatbot)
+                    st.session_state.global_metrics["chatbot"]["total_tokens"] += st.session_state.chatbot.last_tokens
+                    st.session_state.global_metrics["chatbot"]["total_cost"] += st.session_state.chatbot.last_cost
+                    st.session_state.global_metrics["chatbot"]["queries"] += 1
+
+                    # Accumulate Global Metrics (Agent)
+                    st.session_state.global_metrics["agent"]["total_tokens"] += st.session_state.active_agent.last_tokens
+                    st.session_state.global_metrics["agent"]["total_cost"] += st.session_state.active_agent.last_cost
+                    st.session_state.global_metrics["agent"]["queries"] += 1
                 except Exception as e:
                     st.error(f"❌ Lỗi khi xử lý: {e}")
-                    return
-
-            # Display results in two columns
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.markdown("#### 🤖 Chatbot (Baseline)")
-                st.markdown(
-                    f"""
-    <div style="background-color: #003d99; color: #ffffff; padding: 15px; border-radius: 8px; border-left: 4px solid #0052cc; font-size: 14px; line-height: 1.6;">
-    {chatbot_response}
-    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                st.markdown(f"**⏱️ Time:** {st.session_state.chatbot.last_latency:.2f} ms | **🪙 Tokens:** {st.session_state.chatbot.last_tokens} | **💵 Cost:** ${st.session_state.chatbot.last_cost:.5f} | **⚖️ Ratio (PMT/TOT):** {st.session_state.chatbot.last_ratio:.2f}")
-
-            with col2:
-                st.markdown(f"#### 🧠 {agent_selection}")
-                st.markdown(
-                    f"""
-    <div style="background-color: #1a6d1a; color: #ffffff; padding: 15px; border-radius: 8px; border-left: 4px solid #33a333; font-size: 14px; line-height: 1.6;">
-    {agent_response}
-    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                st.markdown(f"**⏱️ Time:** {st.session_state.active_agent.last_latency:.2f} ms | **🪙 Tokens:** {st.session_state.active_agent.last_tokens} | **💵 Cost:** ${st.session_state.active_agent.last_cost:.5f} | **⚖️ Ratio (PMT/TOT):** {st.session_state.active_agent.last_ratio:.2f}")
-                
-                with st.expander("🛠️ Xem Trace"):
-                    if hasattr(st.session_state.active_agent, 'last_trace'):
-                        if agent_selection == "Agent OpenAI Tools (agent_v2.py)":
-                            for idx, t in enumerate(st.session_state.active_agent.last_trace):
-                                st.markdown(f"**Bước {idx + 1}:**")
-                                st.json(t)
-                        else:
-                            for t in st.session_state.active_agent.last_trace:
-                                st.text(t)
-
-            # Reset chatbot state for next conversation
-            st.session_state.chatbot.history = []
-
-        elif run_query and not user_input.strip():
-            st.warning("⚠️ Vui lòng nhập một câu hỏi.")
+            st.rerun()
 
     elif app_mode == "Monitor":
         st.markdown("## 📈 Global Metrics Dashboard (Monitor)")
-        st.markdown("Theo dõi chi phí và số lượng token hệ thống đã sử dụng trong phiên làm việc (session) hiện tại.")
+        st.markdown("Theo dõi chi phí và số lượng token hệ thống đã sử dụng cho mỗi phiên bản.")
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Tokens Processed", f"{st.session_state.global_metrics['total_tokens']:,}")
-        col2.metric("Total Estimated Cost (USD)", f"${st.session_state.global_metrics['total_cost']:.5f}")
-        col3.metric("Successful Queries Executed", st.session_state.global_metrics['queries'])
+        st.markdown("### 🤖 Chatbot (Baseline)")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Tokens", f"{st.session_state.global_metrics['chatbot']['total_tokens']:,}")
+        c2.metric("Total Cost (USD)", f"${st.session_state.global_metrics['chatbot']['total_cost']:.5f}")
+        c3.metric("Queries Executed", st.session_state.global_metrics['chatbot']['queries'])
 
-        st.info("Các số liệu bên trên được tích luỹ cho cả Chatbot và Agent sau mỗi lần Gửi truy vấn thành công.")
+        st.markdown("---")
+        st.markdown(f"### 🧠 {agent_selection}")
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Total Tokens", f"{st.session_state.global_metrics['agent']['total_tokens']:,}")
+        a2.metric("Total Cost (USD)", f"${st.session_state.global_metrics['agent']['total_cost']:.5f}")
+        a3.metric("Queries Executed", st.session_state.global_metrics['agent']['queries'])
+
+        st.markdown("---")
+        st.markdown("### 📊 Tổng cộng (Total System)")
+        t_tokens = st.session_state.global_metrics['chatbot']['total_tokens'] + st.session_state.global_metrics['agent']['total_tokens']
+        t_cost = st.session_state.global_metrics['chatbot']['total_cost'] + st.session_state.global_metrics['agent']['total_cost']
+        t_queries = st.session_state.global_metrics['chatbot']['queries'] # Same as agent queries usually
+
+        t1, t2, t3 = st.columns(3)
+        t1.metric("Combined Tokens", f"{t_tokens:,}")
+        t2.metric("Combined Cost (USD)", f"${t_cost:.5f}")
+        t3.metric("Total Queries", t_queries)
 
     # Footer
     st.markdown("---")

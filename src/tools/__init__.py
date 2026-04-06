@@ -7,6 +7,7 @@ from src.tools.restaurant_tools import (
     get_best_seller,
     get_combo,
     get_item,
+    get_all_items,
 )
 
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "COMBOS",
     "TOOL_REGISTRY",
     "get_item",
+    "get_all_items",
     "get_best_seller",
     "get_best_five",
     "get_combo",

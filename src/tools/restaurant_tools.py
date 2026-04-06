@@ -64,6 +64,22 @@ def _find_item(value: str) -> Optional[Dict[str, Any]]:
             return item
     return None
 
+def get_all_items() -> Dict[str, Any]:
+    """Get all items in the menu (simplified list)."""
+    results = []
+    for item in _ITEM_LIST:
+        results.append({
+            "id": item.get("id"),
+            "name_vi": item.get("name_vi"),
+            "price": item.get("price"),
+            "category_vi": item.get("category_vi"),
+            "available": item.get("available", False)
+        })
+    return {
+        "ok": True,
+        "items": results
+    }
+
 
 def get_item(item: str) -> Dict[str, Any]:
     """Get menu item details by code or exact name."""
@@ -176,6 +192,9 @@ def check_freeship(total_amount: int, city: str = "Ha Noi") -> Dict[str, Any]:
 def _tool_get_item(args: str) -> Dict[str, Any]:
     return get_item(args)
 
+def _tool_get_all_items(_: str = "") -> Dict[str, Any]:
+    return get_all_items()
+
 
 def _tool_get_best_seller(_: str = "") -> Dict[str, Any]:
     return get_best_seller()
@@ -223,6 +242,11 @@ def _tool_check_freeship(args: str) -> Dict[str, Any]:
 
 
 TOOL_REGISTRY: List[Dict[str, Any]] = [
+    {
+        "name": "get_all_items",
+        "description": "Get a lightweight summary list of every single food item in the menu (id, name, price). Useful as a lookup index when user misspells an item name.",
+        "func": _tool_get_all_items,
+    },
     {
         "name": "get_item",
         "description": "Get an item by code or exact name. Input: item_code_or_name",
