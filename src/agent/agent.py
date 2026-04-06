@@ -152,7 +152,10 @@ class ReActAgent:
 
         # Ground likely facts early to reduce hallucination risk.
         planned_actions = self._plan_actions_v2(user_input)
+        if planned_actions:
+            print(f"\n[PRE-GROUND] Sẽ chạy {len(planned_actions)} tool(s) trước khi hỏi LLM:")
         for tool_name, args in planned_actions:
+            print(f"  → {tool_name}({args!r})")
             observation = self._execute_tool(tool_name, args)
             latest_observations[tool_name] = observation
             scratchpad.append("Thought: Dùng dữ liệu thực từ tool để trả lời chính xác.")
@@ -177,6 +180,7 @@ class ReActAgent:
             parsed_action = self._parse_action(content)
             if parsed_action:
                 tool_name, args = parsed_action
+                print(f"  [Step {steps+1}] Tool: {tool_name}({args!r})")
                 observation = self._execute_tool(tool_name, args)
                 latest_observations[tool_name] = observation
                 thought = self._extract_thought(content)
@@ -368,12 +372,12 @@ class ReActAgent:
 
                 try:
                     output = func(args)
-                    if isinstance(output, dict):
-                        return output
-                    return {
-                        "ok": True,
-                        "result": output,
-                    }
+                    result = output if isinstance(output, dict) else {"ok": True, "result": output}
+                    logger.log_event(
+                        "AGENT_TOOL_CALL",
+                        {"tool": tool_name, "args": args, "ok": result.get("ok", True)},
+                    )
+                    return result
                 except Exception as e:
                     logger.log_event(
                         "AGENT_TOOL_ERROR",

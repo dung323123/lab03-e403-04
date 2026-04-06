@@ -416,50 +416,102 @@ def _tool_check_freeship(args: str) -> Dict[str, Any]:
 TOOL_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "get_item",
-        "description": "Get an item by code or exact name. Input: item_code_or_name",
+        "description": (
+            "Tra cứu thông tin một món ăn theo mã hoặc tên.\n"
+            "Input: tên hoặc mã món (string). Mã hợp lệ: GA2, GA4, BURGER, FRIES, PEPSI, SALAD, NUGGETS, CHEESE_BALLS.\n"
+            "  Ví dụ: get_item(GA2) hoặc get_item(Gà rán 2 miếng)\n"
+            "Output: {ok, item: {id, name_vi, category_vi, price, available, stock, description_vi}}\n"
+            "  Nếu không tìm thấy: {ok: false, message}"
+        ),
         "func": _tool_get_item,
     },
     {
         "name": "get_best_seller",
-        "description": "Get the best-selling available menu item. No input needed.",
+        "description": (
+            "Lấy món bán chạy nhất hiện đang còn hàng.\n"
+            "Input: không cần (để trống).\n"
+            "Output: {ok, item: {id, name_vi, price, available, stock}, reason}"
+        ),
         "func": _tool_get_best_seller,
     },
     {
         "name": "get_best_five",
-        "description": "Get top 5 best-selling available menu items. No input needed.",
+        "description": (
+            "Lấy top 5 món bán chạy nhất hiện đang còn hàng.\n"
+            "Input: không cần (để trống).\n"
+            "Output: {ok, items: [{id, name_vi, price, available, stock}, ...]}"
+        ),
         "func": _tool_get_best_five,
     },
     {
         "name": "get_combo",
-        "description": "Get combo details by combo name. Empty input returns all combos.",
+        "description": (
+            "Tra cứu thông tin combo theo tên. Để trống để lấy toàn bộ combo.\n"
+            "Input: tên combo (string) hoặc để trống.\n"
+            "  Tên hợp lệ: 'Combo Cá nhân', 'Combo Cặp đôi' (FF2), 'Combo Gia đình'.\n"
+            "  Ví dụ: get_combo(FF2) hoặc get_combo(Combo Gia đình) hoặc get_combo()\n"
+            "Output: {ok, combo: {id, name_vi, items, original_price, combo_price, serving_size_vi}}\n"
+            "  Hoặc {ok, combos: [...]} nếu không có input.\n"
+            "  Nếu không tìm thấy: {ok: false, message}"
+        ),
         "func": _tool_get_combo,
     },
     {
         "name": "check_freeship",
-        "description": "Check delivery and freeship by total amount and city. Input: 'amount[,city]'.",
+        "description": (
+            "Kiểm tra khả năng giao hàng và điều kiện freeship theo tổng tiền và thành phố.\n"
+            "Input: 'tong_tien,ten_thanh_pho' — thành phố mặc định là Ha Noi nếu bỏ qua.\n"
+            "  Ví dụ: check_freeship(347200,Ha Noi) hoặc check_freeship(200000,Ho Chi Minh)\n"
+            "Output: {ok, deliverable, freeship, threshold: 200000, remaining_for_freeship}\n"
+            "  deliverable=false nếu ngoài Hà Nội. freeship=true nếu tổng >= 200.000đ."
+        ),
         "func": _tool_check_freeship,
     },
     {
         "name": "list_menu",
-        "description": "List all available menu items. Optional input: category name (e.g. 'Gà rán', 'Burger', 'Nước uống'). Empty input returns full menu.",
+        "description": (
+            "Liệt kê toàn bộ món ăn đang có sẵn, có thể lọc theo danh mục.\n"
+            "Input: tên danh mục (string) hoặc để trống để lấy toàn bộ.\n"
+            "  Danh mục hợp lệ: 'Gà rán', 'Burger', 'Món phụ', 'Nước uống', 'Ăn vặt'.\n"
+            "  Ví dụ: list_menu() hoặc list_menu(Gà rán)\n"
+            "Output: {ok, count, items: [{id, name_vi, category_vi, price, available, stock}, ...]}"
+        ),
         "func": _tool_list_menu,
     },
     {
         "name": "list_discounts",
-        "description": "List all currently active discount codes with their conditions. No input needed.",
+        "description": (
+            "Liệt kê tất cả mã giảm giá đang còn hiệu lực.\n"
+            "Input: không cần (để trống).\n"
+            "Output: {ok, count, discounts: [{code, type, value, min_order_value, description_vi, active}, ...]}\n"
+            "  type='percentage': giảm theo %, type='fixed': giảm số tiền cố định."
+        ),
         "func": _tool_list_discounts,
     },
     {
         "name": "apply_discount",
-        "description": "Apply a discount code to a total bill amount. Input: 'total_amount,DISCOUNT_CODE' (e.g. '350000,GA20').",
+        "description": (
+            "Áp dụng mã giảm giá vào tổng tiền đơn hàng.\n"
+            "Input: 'tong_tien,MA_GIAM_GIA' — số tiền (VND) và mã giảm giá.\n"
+            "  Ví dụ: apply_discount(434000,GA20) hoặc apply_discount(150000,STUDENT10)\n"
+            "Output (thành công): {ok: true, code, original_amount, discount_amount, final_amount, description}\n"
+            "Output (thất bại): {ok: false, message} — khi mã sai, hết hạn, hoặc chưa đủ điều kiện."
+        ),
         "func": _tool_apply_discount,
     },
     {
         "name": "calculate_bill",
         "description": (
-            "Calculate bill total from a list of items/combos with quantities. "
-            "Input format: 'ITEM_CODE:qty,ITEM_CODE:qty' or 'ITEM_CODE:qty|DISCOUNT_CODE' to also apply a discount. "
-            "Examples: 'GA2:2,PEPSI:1' or 'GA4:1,FRIES:2,PEPSI:3|GA20' or 'Combo Gia dinh:1,FRIES:2'."
+            "Tính tổng hóa đơn từ danh sách món/combo kèm số lượng, có thể áp mã giảm giá.\n"
+            "Input: 'TEN_MON:so_luong,TEN_MON:so_luong|MA_GIAM_GIA'\n"
+            "  - Tên món: dùng mã (GA2, GA4, FRIES, PEPSI...) hoặc tên tiếng Việt.\n"
+            "  - Tên combo: 'Combo Gia đình', 'FF2', 'Combo Cá nhân'...\n"
+            "  - Mã giảm giá (tùy chọn): đặt sau dấu | ở cuối.\n"
+            "  Ví dụ: calculate_bill(GA2:2,PEPSI:1)\n"
+            "         calculate_bill(Combo Gia đình:1,FRIES:2,PEPSI:3|GA20)\n"
+            "         calculate_bill(FF2:1,PEPSI:1|STUDENT10)\n"
+            "Output: {ok, line_items: [{name, unit_price, quantity, total}], subtotal, final_amount,\n"
+            "         discount: {code, original_amount, discount_amount, final_amount, description}}"
         ),
         "func": _tool_calculate_bill,
     },
