@@ -13,8 +13,9 @@
 ## 1. Executive Summary
 
 Mục tiêu của dự án là xây dựng một ReAct Agent có khả năng tự động hóa việc tư vấn và đặt món cho nhà hàng gà rán tại Hà Nội, khắc phục các điểm yếu của Chatbot truyền thống (ảo giác giá cả, bỏ qua logic nghiệp vụ).
-Success Rate: Đạt 85% trên tổng số test cases đánh giá.
-Key Outcome: So với Chatbot Baseline, ReAct Agent của nhóm em xử lý thành công 100% các truy vấn đa bước (tính toán bill kết hợp mã giảm giá và freeship). Chatbot thường xuyên bịa đặt (hallucinate) giá combo, trong khi Agent v2 đã sử dụng công cụ thành công để truy xuất chính xác thông tin từ mock_data.json.
+- Success Rate: Đạt 85% trên tổng số test cases đánh giá.
+- Key Outcome: So với Chatbot Baseline, ReAct Agent của nhóm em xử lý thành công 100% các truy vấn đa bước (tính toán bill kết hợp mã giảm giá và freeship). 
+- Chatbot thường xuyên bịa đặt (hallucinate) giá combo, trong khi Agent v2 đã sử dụng công cụ thành công để truy xuất chính xác thông tin từ mock_data.json.
 
 ---
 
