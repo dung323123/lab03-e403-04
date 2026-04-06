@@ -249,6 +249,14 @@ class ReActAgent:
         lower = user_input.lower()
         actions: List[Tuple[str, str]] = []
 
+        # Discount/voucher queries → list_discounts.
+        if any(k in lower for k in ["mã giảm giá", "ma giam gia", "voucher", "coupon", "khuyến mãi", "khuyen mai", "discount"]):
+            actions.append(("list_discounts", ""))
+
+        # Full menu listing requests → list_menu.
+        if any(k in lower for k in ["thực đơn", "thuc don", "menu", "có những món", "co nhung mon", "danh sách món", "danh sach mon"]):
+            actions.append(("list_menu", ""))
+
         # Combo info requests.
         if "combo" in lower:
             combo_match = re.search(r"combo\s+([\w\sÀ-ỹ]+)", user_input, flags=re.IGNORECASE)
@@ -290,6 +298,16 @@ class ReActAgent:
         alias = re.search(r"\b(GA\d+|BURGER|FRIES|PEPSI|SALAD|NUGGETS|CHEESE_BALLS)\b", user_input, flags=re.IGNORECASE)
         if alias and not any(name == "get_item" for name, _ in actions):
             actions.append(("get_item", alias.group(1).upper()))
+
+        # Bill calculation: detect item codes with quantities like "2 GA2", "3 Pepsi".
+        qty_item_matches = re.findall(r"(\d+)\s+(GA\d+|BURGER|FRIES|PEPSI|SALAD|NUGGETS|CHEESE_BALLS)", user_input, flags=re.IGNORECASE)
+        if qty_item_matches:
+            items_str = ",".join(f"{code.upper()}:{qty}" for qty, code in qty_item_matches)
+            # Check if a discount code is mentioned.
+            discount_match = re.search(r"\b(GA20|STUDENT10|FREESIDE|OLD50)\b", user_input, flags=re.IGNORECASE)
+            if discount_match:
+                items_str += f"|{discount_match.group(1).upper()}"
+            actions.append(("calculate_bill", items_str))
 
         # Freeship checks.
         if any(k in lower for k in ["freeship", "miễn phí ship", "mien phi ship", "giao", "ship"]):

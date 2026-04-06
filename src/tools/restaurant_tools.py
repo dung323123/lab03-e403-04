@@ -149,6 +149,159 @@ def get_combo(combo_name: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+def list_menu(category: Optional[str] = None) -> Dict[str, Any]:
+    """List all available menu items, optionally filtered by category."""
+    items = [item for item in ITEMS.values() if item.get("available")]
+    if category:
+        cat_lower = category.strip().lower()
+        cat_plain = _strip_accents(cat_lower)
+        items = [
+            item for item in items
+            if _strip_accents(item.get("category_vi", "").lower()) == cat_plain
+            or item.get("category_vi", "").lower() == cat_lower
+        ]
+    return {
+        "ok": True,
+        "items": items,
+        "count": len(items),
+    }
+
+
+def list_discounts(active_only: bool = True) -> Dict[str, Any]:
+    """List discount codes. By default returns only active codes."""
+    discounts = _DATA.get("discounts", [])
+    if active_only:
+        discounts = [d for d in discounts if d.get("active")]
+    return {
+        "ok": True,
+        "discounts": discounts,
+        "count": len(discounts),
+    }
+
+
+def apply_discount(total_amount: int, code: str) -> Dict[str, Any]:
+    """Apply a discount code to a total amount. Returns discounted total."""
+    discounts = _DATA.get("discounts", [])
+    code_upper = code.strip().upper()
+    discount = next((d for d in discounts if d["code"].upper() == code_upper), None)
+
+    if not discount:
+        return {"ok": False, "message": f"Mã giảm giá '{code}' không tồn tại."}
+    if not discount.get("active"):
+        return {"ok": False, "message": f"Mã giảm giá '{code}' đã hết hạn hoặc không còn hiệu lực."}
+    if total_amount < discount.get("min_order_value", 0):
+        return {
+            "ok": False,
+            "message": (
+                f"Đơn hàng chưa đủ điều kiện. Mã '{code}' yêu cầu đơn tối thiểu "
+                f"{discount['min_order_value']:,}đ (hiện tại: {total_amount:,}đ)."
+            ),
+        }
+
+    if discount["type"] == "percentage":
+        discount_amount = round(total_amount * discount["value"] / 100)
+    else:  # fixed
+        discount_amount = min(discount["value"], total_amount)
+
+    final_amount = total_amount - discount_amount
+    return {
+        "ok": True,
+        "code": code_upper,
+        "original_amount": total_amount,
+        "discount_amount": discount_amount,
+        "final_amount": final_amount,
+        "description": discount.get("description_vi"),
+    }
+
+
+def calculate_bill(items_str: str, discount_code: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Calculate total bill from a list of items with quantities.
+    items_str format: 'GA2:2,PEPSI:3,FRIES:1' or 'COMBO_CA_NHAN:1,PEPSI:2'
+    Optionally applies a discount code.
+    """
+    if not items_str or not items_str.strip():
+        return {"ok": False, "message": "Danh sách món trống."}
+
+    line_items = []
+    subtotal = 0
+    errors = []
+
+    for part in items_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            name_raw, qty_raw = part.rsplit(":", 1)
+            try:
+                qty = int(qty_raw.strip())
+            except ValueError:
+                errors.append(f"Số lượng không hợp lệ: '{qty_raw}'")
+                continue
+        else:
+            name_raw = part
+            qty = 1
+
+        name_raw = name_raw.strip()
+
+        # Try item lookup first.
+        item_result = _find_item(name_raw)
+        if item_result:
+            if not item_result.get("available"):
+                errors.append(f"'{item_result['name_vi']}' hiện hết hàng.")
+                continue
+            price = item_result["price"]
+            subtotal += price * qty
+            line_items.append({
+                "name": item_result["name_vi"],
+                "unit_price": price,
+                "quantity": qty,
+                "total": price * qty,
+            })
+            continue
+
+        # Try combo lookup.
+        combo_result = get_combo(name_raw)
+        if combo_result.get("ok"):
+            combo = combo_result["combo"]
+            price = combo["combo_price"]
+            subtotal += price * qty
+            line_items.append({
+                "name": combo["name_vi"],
+                "unit_price": price,
+                "quantity": qty,
+                "total": price * qty,
+            })
+            continue
+
+        errors.append(f"Không tìm thấy món/combo: '{name_raw}'")
+
+    if not line_items and errors:
+        return {"ok": False, "message": "; ".join(errors)}
+
+    result: Dict[str, Any] = {
+        "ok": True,
+        "line_items": line_items,
+        "subtotal": subtotal,
+    }
+
+    if errors:
+        result["warnings"] = errors
+
+    if discount_code:
+        discount_result = apply_discount(subtotal, discount_code)
+        if discount_result.get("ok"):
+            result["discount"] = discount_result
+            result["final_amount"] = discount_result["final_amount"]
+        else:
+            result["discount_error"] = discount_result.get("message")
+            result["final_amount"] = subtotal
+    else:
+        result["final_amount"] = subtotal
+
+    return result
+
+
 def check_freeship(total_amount: int, city: str = "Ha Noi") -> Dict[str, Any]:
     """Check shipping availability and freeship based on city and bill total."""
     city_normalized = city.strip().lower()
@@ -188,6 +341,44 @@ def _tool_get_best_five(_: str = "") -> Dict[str, Any]:
 def _tool_get_combo(args: str) -> Dict[str, Any]:
     arg = args.strip()
     return get_combo(arg if arg else None)
+
+
+def _tool_list_menu(args: str) -> Dict[str, Any]:
+    arg = args.strip()
+    return list_menu(arg if arg else None)
+
+
+def _tool_list_discounts(_: str = "") -> Dict[str, Any]:
+    return list_discounts(active_only=True)
+
+
+def _tool_apply_discount(args: str) -> Dict[str, Any]:
+    # Format: "amount,CODE"  e.g. "347200,GA20"
+    parts = [p.strip() for p in args.split(",") if p.strip()]
+    if len(parts) < 2:
+        return {"ok": False, "message": "Thiếu tham số. Dùng: 'tong_tien,MA_GIAM_GIA'"}
+    total: Optional[int] = None
+    code = ""
+    for part in parts:
+        digits = part.replace(".", "").replace("_", "")
+        if digits.isdigit() and total is None:
+            total = int(digits)
+        else:
+            code = part
+    if total is None or not code:
+        return {"ok": False, "message": "Không thể phân tích tham số. Dùng: 'tong_tien,MA_GIAM_GIA'"}
+    return apply_discount(total, code)
+
+
+def _tool_calculate_bill(args: str) -> Dict[str, Any]:
+    # Format: "GA2:2,PEPSI:1" or "GA2:2,PEPSI:1|GA20" (pipe separates discount code)
+    discount_code: Optional[str] = None
+    if "|" in args:
+        items_part, code_part = args.split("|", 1)
+        discount_code = code_part.strip() or None
+    else:
+        items_part = args
+    return calculate_bill(items_part.strip(), discount_code)
 
 
 def _tool_check_freeship(args: str) -> Dict[str, Any]:
@@ -247,5 +438,29 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "name": "check_freeship",
         "description": "Check delivery and freeship by total amount and city. Input: 'amount[,city]'.",
         "func": _tool_check_freeship,
+    },
+    {
+        "name": "list_menu",
+        "description": "List all available menu items. Optional input: category name (e.g. 'Gà rán', 'Burger', 'Nước uống'). Empty input returns full menu.",
+        "func": _tool_list_menu,
+    },
+    {
+        "name": "list_discounts",
+        "description": "List all currently active discount codes with their conditions. No input needed.",
+        "func": _tool_list_discounts,
+    },
+    {
+        "name": "apply_discount",
+        "description": "Apply a discount code to a total bill amount. Input: 'total_amount,DISCOUNT_CODE' (e.g. '350000,GA20').",
+        "func": _tool_apply_discount,
+    },
+    {
+        "name": "calculate_bill",
+        "description": (
+            "Calculate bill total from a list of items/combos with quantities. "
+            "Input format: 'ITEM_CODE:qty,ITEM_CODE:qty' or 'ITEM_CODE:qty|DISCOUNT_CODE' to also apply a discount. "
+            "Examples: 'GA2:2,PEPSI:1' or 'GA4:1,FRIES:2,PEPSI:3|GA20' or 'Combo Gia dinh:1,FRIES:2'."
+        ),
+        "func": _tool_calculate_bill,
     },
 ]

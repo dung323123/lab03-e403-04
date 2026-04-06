@@ -7,6 +7,10 @@ from src.tools.restaurant_tools import (
     get_best_seller,
     get_combo,
     get_item,
+    list_menu,
+    list_discounts,
+    apply_discount,
+    calculate_bill,
 )
 
 __all__ = [
@@ -18,4 +22,8 @@ __all__ = [
     "get_best_five",
     "get_combo",
     "check_freeship",
+    "list_menu",
+    "list_discounts",
+    "apply_discount",
+    "calculate_bill",
 ]
