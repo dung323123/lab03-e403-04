@@ -27,7 +27,7 @@ Hệ thống triển khai vòng lặp suy luận Thought -> Action -> Observatio
 - Observation: Nhận kết quả JSON từ cơ sở dữ liệu.
 Vòng lặp tiếp tục cho đến khi Agent thu thập đủ dữ liệu để đưa ra Final Answer một cách chính xác nhất.
 Ở Agent v2, nhóm đã tích hợp thêm Pre-grounding để chặn các truy vấn ngoài vùng phủ sóng (Out-of-domain) ngay từ đầu.
-![Luồng hoạt động cơ bản](image.png) ![Luồng xử lý](image-1.png)
+![Luồng xử lý](image-1.png) ![Mô hình xử lý](image-6.png)
 ![Kết quả](image-2.png) ![Kết quả](image-3.png) ![Kết qủa](image-4.png) ![Kết quả](image-5.png)
 
 ### 2.2 Tool Definitions (Inventory)
