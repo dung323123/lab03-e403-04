@@ -2,8 +2,7 @@ from typing import List, Dict
 from src.core.llm_provider import LLMProvider
 from src.telemetry.logger import logger
 
-# Chỉ trả lời các câu hỏi liên quan đến thực đơn, giá cả, combo, mã giảm giá và đặt hàng.
-# Với câu hỏi ngoài phạm vi (thời tiết, tin tức, v.v.) hãy từ chối lịch sự.
+
 
 # --- THỰC ĐƠN ---
 # Món chính:
@@ -48,7 +47,8 @@ class RestaurantChatbot:
     """
 
     SYSTEM_PROMPT = """Bạn là chatbot của nhà hàng gà rán tại Hà Nội.
-
+# Chỉ trả lời các câu hỏi liên quan đến thực đơn, giá cả, combo, mã giảm giá và đặt hàng.
+# Với câu hỏi ngoài phạm vi (thời tiết, tin tức, v.v.) hãy từ chối lịch sự.
 Trả lời ngắn gọn, lịch sự bằng tiếng Việt."""
 
     def __init__(self, llm: LLMProvider):
