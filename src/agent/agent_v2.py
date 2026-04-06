@@ -8,6 +8,9 @@ from src.core.openai_provider import OpenAIProvider
 from src.telemetry.logger import logger
 from src.tools import menu_tool
 
+from src.core.metrics import calculate_cost, calculate_token_ratio
+from src.core.retry import retry_with_backoff
+
 
 class ReActAgent:
     """
@@ -26,6 +29,10 @@ class ReActAgent:
         self.max_steps = max_steps
         self.trace_enabled = trace_enabled
         self.last_trace: List[Dict[str, Any]] = []
+        self.last_tokens = 0
+        self.last_latency = 0
+        self.last_cost = 0.0
+        self.last_ratio = 0.0
         self.tool_map = {t["name"]: t for t in tools}
 
     def get_system_prompt(self) -> str:
@@ -48,6 +55,14 @@ Quy tắc xử lý đơn hàng:
 
     def _openai_tools_schema(self) -> List[Dict[str, Any]]:
         return [t["schema"] for t in self.tools]
+
+    @retry_with_backoff(retries=3, backoff_in_seconds=2)
+    def _call_llm(self, messages):
+        return self.llm.client.chat.completions.create(
+            model=self.llm.model_name,
+            messages=messages,
+            tools=self._openai_tools_schema(),
+        )
 
     def _record_trace(self, step: int, tool_name: str, args: Dict[str, Any], observation: str) -> None:
         entry = {
@@ -87,8 +102,16 @@ Quy tắc xử lý đơn hàng:
         return {"success": True, "result": result}
 
     def run(self, user_input: str) -> str:
+        import time
         if not isinstance(self.llm, OpenAIProvider):
             return "Agent hiện chỉ hỗ trợ OpenAIProvider cho function calling."
+
+        self.last_trace = []
+        total_tokens = 0
+        total_prompt = 0
+        total_completion = 0
+        total_latency = 0
+        total_cost = 0.0
 
         logger.log_event("AGENT_START", {"input": user_input, "model": self.llm.model_name})
 
@@ -98,11 +121,15 @@ Quy tắc xử lý đơn hàng:
         ]
 
         for step in range(self.max_steps):
-            response = self.llm.client.chat.completions.create(
-                model=self.llm.model_name,
-                messages=messages,
-                tools=self._openai_tools_schema(),
-            )
+            start_time = time.time()
+            response = self._call_llm(messages)
+            latency_ms = (time.time() - start_time) * 1000
+            total_latency += latency_ms
+
+            if response.usage:
+                total_tokens += response.usage.total_tokens
+                total_prompt += response.usage.prompt_tokens
+                total_completion += response.usage.completion_tokens
 
             msg = response.choices[0].message
 
@@ -156,9 +183,21 @@ Quy tắc xử lý đơn hàng:
             # No tool calls -> final response
             if msg.content:
                 logger.log_event("AGENT_END", {"steps": step + 1, "reason": "final_answer"})
+                
+                self.last_tokens = total_tokens
+                self.last_latency = total_latency
+                self.last_cost = calculate_cost(self.llm.model_name, total_prompt, total_completion)
+                self.last_ratio = calculate_token_ratio(total_prompt, total_completion)
+
                 return msg.content.strip()
 
         logger.log_event("AGENT_END", {"steps": self.max_steps, "reason": "max_steps"})
+        
+        self.last_tokens = total_tokens
+        self.last_latency = total_latency
+        self.last_cost = calculate_cost(self.llm.model_name, total_prompt, total_completion)
+        self.last_ratio = calculate_token_ratio(total_prompt, total_completion)
+
         return "Xin lỗi, mình chưa thể hoàn thành yêu cầu trong số bước cho phép."
 
 

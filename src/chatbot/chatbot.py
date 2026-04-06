@@ -35,6 +35,10 @@ Trả lời ngắn gọn, đúng trọng tâm, lịch sự bằng tiếng Việt
     def __init__(self, llm: LLMProvider):
         self.llm = llm
         self.history: List[Dict[str, str]] = []
+        self.last_tokens = 0
+        self.last_latency = 0
+        self.last_cost = 0.0
+        self.last_ratio = 0.0
 
     @staticmethod
     def _is_menu_list_query(user_message: str) -> bool:
@@ -229,6 +233,11 @@ Trả lời ngắn gọn, đúng trọng tâm, lịch sự bằng tiếng Việt
 
         result = self.llm.generate(history_text, system_prompt=self.SYSTEM_PROMPT)
         response = result["content"]
+
+        self.last_tokens = result.get("usage", {}).get("total_tokens", 0)
+        self.last_latency = result.get("latency_ms", 0)
+        self.last_cost = result.get("cost", 0.0)
+        self.last_ratio = result.get("token_ratio", 0.0)
 
         self.history.append({"role": "assistant", "content": response})
         logger.log_event("CHATBOT_RESPONSE", {
