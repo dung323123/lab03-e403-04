@@ -1,397 +1,372 @@
 import json
-import os
-from typing import List, Dict, Any, Optional
-from dotenv import load_dotenv
-
+import re
+from typing import List, Dict, Any, Optional, Tuple
 from src.core.llm_provider import LLMProvider
-from src.core.openai_provider import OpenAIProvider
 from src.telemetry.logger import logger
-from src.tools import menu_tool
-
 
 class ReActAgent:
     """
-    ReAct-style agent using OpenAI tool calling.
+    SKELETON: A ReAct-style Agent that follows the Thought-Action-Observation loop.
+    Students should implement the core loop logic and tool execution.
     """
-
+    
     def __init__(
         self,
         llm: LLMProvider,
         tools: List[Dict[str, Any]],
-        max_steps: int = 6,
-        trace_enabled: bool = False,
+        max_steps: int = 5,
+        version: str = "v1",
     ):
         self.llm = llm
         self.tools = tools
         self.max_steps = max_steps
-        self.trace_enabled = trace_enabled
-        self.last_trace: List[Dict[str, Any]] = []
-        self.tool_map = {t["name"]: t for t in tools}
+        self.version = version
+        self.history = []
 
     def get_system_prompt(self) -> str:
-        tool_descriptions = "\n".join(
-            [f"- {t['name']}: {t['description']}" for t in self.tools]
-        )
+        """
+        TODO: Implement the system prompt that instructs the agent to follow ReAct.
+        Should include:
+        1.  Available tools and their descriptions.
+        2.  Format instructions: Thought, Action, Observation.
+        """
+        tool_descriptions = "\n".join([f"- {t['name']}: {t['description']}" for t in self.tools])
+
+        if self.version == "v2":
+            extra_rules = """
+    Rules:
+    - Chỉ được gọi đúng tên tool đã cung cấp.
+    - Mỗi bước chỉ dùng tối đa 1 Action.
+    - Nếu đã đủ dữ liệu, trả lời ngay bằng Final Answer.
+    - Nếu tool trả lỗi/không tìm thấy, nêu rõ cho người dùng và gợi ý dữ liệu cần bổ sung.
+    - Nhà hàng chỉ giao trong Hà Nội. Không xác nhận giao hàng ngoài Hà Nội.
+    """
+        else:
+            extra_rules = """
+    Rules:
+    - Dùng tool khi cần dữ liệu thực tế (món ăn, combo, freeship, best seller).
+    - Khi có Observation đủ thông tin thì chốt Final Answer.
+    - Nhà hàng chỉ giao trong Hà Nội. Không xác nhận giao hàng ngoài Hà Nội.
+    """
+
         return f"""
-Bạn là trợ lý của cửa hàng gà rán ở Hà Nội.
-Chỉ trả lời các câu hỏi về menu, combo, giá, mã giảm giá, đặt hàng.
-Nếu câu hỏi ngoài phạm vi (ví dụ: giá cổ phiếu, thời tiết), hãy nói rõ là không biết.
+    Bạn là trợ lý đặt món của nhà hàng gà rán tại Hà Nội.
+    Bạn có thể suy luận theo ReAct và dùng tools sau:
+    {tool_descriptions}
 
-Bạn có các công cụ sau:
-{tool_descriptions}
+    {extra_rules}
 
-Quy tắc xử lý đơn hàng:
-- Khi khách hỏi mua/đặt hoặc hỏi giá, luôn dùng tool để tính.
-- Luôn kiểm tra tồn kho và luôn kiểm tra mã giảm giá khả dụng.
-- Nếu có mã giảm giá hợp lệ, chỉ áp dụng 1 mã tốt nhất.
-"""
+    Bắt buộc đúng format:
+    Thought: <lý do ngắn>
 
-    def _openai_tools_schema(self) -> List[Dict[str, Any]]:
-        return [t["schema"] for t in self.tools]
+    Trường hợp cần gọi tool:
+    Action: <tool_name>(<args>)
 
-    def _record_trace(self, step: int, tool_name: str, args: Dict[str, Any], observation: str) -> None:
-        entry = {
-            "step": step,
-            "action": tool_name,
-            "args": args,
-            "observation": observation,
-        }
-        self.last_trace.append(entry)
-        if self.trace_enabled:
-            print(f"[Trace] Step {step}: {tool_name}({args})")
-            print(f"[Trace] Observation: {observation}")
+    Trường hợp đủ dữ liệu:
+    Final Answer: <câu trả lời tiếng Việt cho người dùng>
 
-    def _execute_tool(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        tool = self.tool_map.get(tool_name)
-        if not tool:
-            return {"success": False, "message": f"Tool '{tool_name}' not found."}
-        func = tool.get("func")
-        if not func:
-            return {"success": False, "message": f"Tool '{tool_name}' has no function."}
-
-        if not isinstance(args, dict):
-            args = {}
-
-        if "data" in tool:
-            args = dict(args)
-            args.setdefault("data", tool["data"])
-
-        try:
-            result = func(**args)
-        except Exception as exc:
-            logger.error(f"Tool {tool_name} failed: {exc}")
-            return {"success": False, "message": f"{exc}"}
-
-        if isinstance(result, dict):
-            return result
-        return {"success": True, "result": result}
+    Lưu ý quan trọng:
+    - KHÔNG tự tạo Observation.
+    - Observation sẽ do hệ thống cung cấp sau khi Action được chạy.
+        """
 
     def run(self, user_input: str) -> str:
-        if not isinstance(self.llm, OpenAIProvider):
-            return "Agent hiện chỉ hỗ trợ OpenAIProvider cho function calling."
+        if self.version == "v2":
+            return self._run_v2(user_input)
+        return self._run_v1(user_input)
 
-        logger.log_event("AGENT_START", {"input": user_input, "model": self.llm.model_name})
+    def _run_v1(self, user_input: str) -> str:
+        """
+        ReAct loop for v1 (kept stable for baseline comparison).
+        """
+        logger.log_event("AGENT_START", {"input": user_input, "model": self.llm.model_name, "version": self.version})
 
-        messages = [
-            {"role": "system", "content": self.get_system_prompt().strip()},
-            {"role": "user", "content": user_input},
-        ]
+        scratchpad: List[str] = []
+        steps = 0
+        final_answer = ""
 
-        for step in range(self.max_steps):
-            response = self.llm.client.chat.completions.create(
-                model=self.llm.model_name,
-                messages=messages,
-                tools=self._openai_tools_schema(),
+        while steps < self.max_steps:
+            current_prompt = self._build_prompt(user_input, scratchpad)
+            result = self.llm.generate(current_prompt, system_prompt=self.get_system_prompt())
+            content = result.get("content", "").strip()
+
+            logger.log_event(
+                "AGENT_STEP",
+                {
+                    "step": steps + 1,
+                    "llm_output": content,
+                    "usage": result.get("usage", {}),
+                    "latency_ms": result.get("latency_ms"),
+                },
             )
 
-            msg = response.choices[0].message
+            parsed_action = self._parse_action(content)
+            if parsed_action:
+                tool_name, args = parsed_action
+                observation = self._execute_tool(tool_name, args)
+                observation_text = json.dumps(observation, ensure_ascii=False)
+                thought = self._extract_thought(content)
+                if thought:
+                    scratchpad.append(f"Thought: {thought}")
+                scratchpad.append(f"Action: {tool_name}({args})")
+                scratchpad.append(f"Observation: {observation_text}")
+            else:
+                final_answer = self._extract_final_answer(content)
+                if final_answer:
+                    steps += 1
+                    break
 
-            # Log usage if available
-            if response.usage:
-                logger.log_event(
-                    "LLM_METRIC",
-                    {
-                        "usage": {
-                            "prompt_tokens": response.usage.prompt_tokens,
-                            "completion_tokens": response.usage.completion_tokens,
-                            "total_tokens": response.usage.total_tokens,
-                        },
-                        "latency_ms": None,
-                        "provider": "openai",
-                        "step": step + 1,
-                    },
+                # Recovery path for malformed outputs: force model to continue with strict format.
+                scratchpad.append(content)
+                scratchpad.append(
+                    "Observation: Invalid format. Hãy dùng đúng mẫu Action: tool_name(args) hoặc Final Answer:."
                 )
 
-            tool_calls = msg.tool_calls or []
-            if tool_calls:
-                # Append assistant message with tool calls
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": msg.content or "",
-                        "tool_calls": tool_calls,
-                    }
+            steps += 1
+
+        if not final_answer:
+            final_answer = (
+                "Mình chưa thể hoàn tất trong số bước cho phép. "
+                "Bạn vui lòng cung cấp thêm chi tiết (tên món/mã combo/tổng tiền/thành phố) để mình xử lý chính xác hơn."
+            )
+
+        self.history.append({"role": "user", "content": user_input})
+        self.history.append({"role": "assistant", "content": final_answer})
+
+        logger.log_event("AGENT_END", {"steps": steps, "final_answer": final_answer})
+        return final_answer
+
+    def _run_v2(self, user_input: str) -> str:
+        """
+        Improved v2:
+        - Pre-grounds likely-needed tool data before first LLM call.
+        - Keeps ReAct loop for follow-up tool calls.
+        - Enforces delivery business rules on the final answer.
+        """
+        logger.log_event("AGENT_START", {"input": user_input, "model": self.llm.model_name, "version": self.version})
+
+        scratchpad: List[str] = []
+        steps = 0
+        final_answer = ""
+        latest_observations: Dict[str, Dict[str, Any]] = {}
+
+        # Ground likely facts early to reduce hallucination risk.
+        planned_actions = self._plan_actions_v2(user_input)
+        for tool_name, args in planned_actions:
+            observation = self._execute_tool(tool_name, args)
+            latest_observations[tool_name] = observation
+            scratchpad.append("Thought: Dùng dữ liệu thực từ tool để trả lời chính xác.")
+            scratchpad.append(f"Action: {tool_name}({args})")
+            scratchpad.append(f"Observation: {json.dumps(observation, ensure_ascii=False)}")
+
+        while steps < self.max_steps:
+            current_prompt = self._build_prompt(user_input, scratchpad)
+            result = self.llm.generate(current_prompt, system_prompt=self.get_system_prompt())
+            content = result.get("content", "").strip()
+
+            logger.log_event(
+                "AGENT_STEP",
+                {
+                    "step": steps + 1,
+                    "llm_output": content,
+                    "usage": result.get("usage", {}),
+                    "latency_ms": result.get("latency_ms"),
+                },
+            )
+
+            parsed_action = self._parse_action(content)
+            if parsed_action:
+                tool_name, args = parsed_action
+                observation = self._execute_tool(tool_name, args)
+                latest_observations[tool_name] = observation
+                thought = self._extract_thought(content)
+                if thought:
+                    scratchpad.append(f"Thought: {thought}")
+                scratchpad.append(f"Action: {tool_name}({args})")
+                scratchpad.append(f"Observation: {json.dumps(observation, ensure_ascii=False)}")
+            else:
+                final_answer = self._extract_final_answer(content)
+                if final_answer:
+                    steps += 1
+                    break
+
+                scratchpad.append(content)
+                scratchpad.append(
+                    "Observation: Invalid format. Hãy dùng đúng mẫu Action: tool_name(args) hoặc Final Answer:."
                 )
 
-                for call in tool_calls:
-                    name = call.function.name
-                    try:
-                        args = json.loads(call.function.arguments or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
+            steps += 1
 
-                    result = self._execute_tool(name, args)
-                    tool_content = json.dumps(result, ensure_ascii=False)
-                    self._record_trace(step + 1, name, args, tool_content)
+        if not final_answer:
+            final_answer = (
+                "Mình chưa thể hoàn tất trong số bước cho phép. "
+                "Bạn vui lòng cung cấp thêm chi tiết (tên món/mã combo/tổng tiền/thành phố) để mình xử lý chính xác hơn."
+            )
 
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": tool_content,
-                        }
-                    )
-                continue
+        final_answer = self._enforce_business_rules_v2(final_answer, latest_observations, user_input)
 
-            # No tool calls -> final response
-            if msg.content:
-                logger.log_event("AGENT_END", {"steps": step + 1, "reason": "final_answer"})
-                return msg.content.strip()
+        self.history.append({"role": "user", "content": user_input})
+        self.history.append({"role": "assistant", "content": final_answer})
 
-        logger.log_event("AGENT_END", {"steps": self.max_steps, "reason": "max_steps"})
-        return "Xin lỗi, mình chưa thể hoàn thành yêu cầu trong số bước cho phép."
+        logger.log_event("AGENT_END", {"steps": steps, "final_answer": final_answer})
+        return final_answer
 
-
-class OpenAIFunctionAgent:
-    """
-    Convenience wrapper to run the ReAct agent with OpenAI + menu tools.
-    """
-
-    def __init__(
-        self,
-        model_name: Optional[str] = None,
-        api_key: Optional[str] = None,
-        data_path: str = "data/mock_data.json",
-        max_steps: int = 6,
-        trace_enabled: Optional[bool] = None,
-    ):
-        load_dotenv()
-        api_key = api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY is missing. Please set it in your environment.")
-
-        model_name = model_name or os.getenv("DEFAULT_MODEL", "gpt-4o")
-        if trace_enabled is None:
-            trace_enabled = os.getenv("AGENT_TRACE", "0") == "1"
-
-        llm = OpenAIProvider(model_name=model_name, api_key=api_key)
-        tools = _build_menu_tools(data_path)
-        self.agent = ReActAgent(
-            llm=llm,
-            tools=tools,
-            max_steps=max_steps,
-            trace_enabled=trace_enabled,
+    def _build_prompt(self, user_input: str, scratchpad: List[str]) -> str:
+        history_text = "\n".join(
+            f"{'User' if h['role'] == 'user' else 'Assistant'}: {h['content']}"
+            for h in self.history[-6:]
+        )
+        trace_text = "\n".join(scratchpad)
+        return (
+            f"Conversation:\n{history_text}\n\n"
+            f"Current user request: {user_input}\n\n"
+            f"ReAct trace so far:\n{trace_text}\n\n"
+            "Tiếp tục theo đúng format ReAct."
         )
 
-    def run(self, user_input: str) -> str:
-        return self.agent.run(user_input)
+    @staticmethod
+    def _extract_final_answer(text: str) -> str:
+        match = re.search(r"Final\s*Answer\s*:\s*(.*)", text, flags=re.IGNORECASE | re.DOTALL)
+        return match.group(1).strip() if match else ""
 
+    @staticmethod
+    def _extract_thought(text: str) -> str:
+        match = re.search(r"Thought\s*:\s*(.*)", text, flags=re.IGNORECASE)
+        return match.group(1).strip() if match else ""
 
-def _build_menu_tools(data_path: str) -> List[Dict[str, Any]]:
-    tools = []
+    @staticmethod
+    def _parse_action(text: str) -> Optional[Tuple[str, str]]:
+        # Accept both single-line and multiline action arguments.
+        match = re.search(r"Action\s*:\s*([a-zA-Z_][a-zA-Z0-9_]*)\((.*?)\)", text, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return None
 
-    tools.append(
-        {
-            "name": "get_item",
-            "description": "Tìm món theo id, tên hoặc category (tiếng Việt).",
-            "func": menu_tool.get_item,
-            "data": data_path,
-            "schema": {
-                "type": "function",
-                "function": {
-                    "name": "get_item",
-                    "description": "Tìm món theo id, tên hoặc category (tiếng Việt).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "item_id": {"type": "string"},
-                            "name": {"type": "string"},
-                            "category_vi": {"type": "string"},
-                            "available_only": {"type": "boolean"},
-                        },
-                        "required": ["item_id", "name", "category_vi", "available_only"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
-            },
+        tool_name = match.group(1).strip()
+        args = match.group(2).strip().strip('"').strip("'")
+        return tool_name, args
+
+    def _plan_actions_v2(self, user_input: str) -> List[Tuple[str, str]]:
+        lower = user_input.lower()
+        actions: List[Tuple[str, str]] = []
+
+        # Combo info requests.
+        if "combo" in lower:
+            combo_match = re.search(r"combo\s+([\w\sÀ-ỹ]+)", user_input, flags=re.IGNORECASE)
+            combo_arg = ""
+            if combo_match:
+                candidate = combo_match.group(1).strip(" ?!.,")
+                if candidate.lower() not in {"nao", "nào", "gi", "gì"}:
+                    combo_arg = candidate
+            actions.append(("get_combo", combo_arg))
+
+        # Bestseller / top-5 requests.
+        if any(k in lower for k in ["bán chạy nhất", "ban chay nhat", "best seller", "món hot", "mon hot"]):
+            actions.append(("get_best_seller", ""))
+        if any(k in lower for k in ["top 5", "5 món bán chạy", "5 mon ban chay", "top nam", "top năm"]):
+            actions.append(("get_best_five", ""))
+
+        # Item-specific checks.
+        item_patterns = [
+            r"món\s+([\w\sÀ-ỹ]+)",
+            r"gia\s+([\w\sÀ-ỹ]+)",
+            r"giá\s+([\w\sÀ-ỹ]+)",
+            r"còn\s+([\w\sÀ-ỹ]+)",
+            r"con\s+([\w\sÀ-ỹ]+)",
+        ]
+        for pattern in item_patterns:
+            m = re.search(pattern, user_input, flags=re.IGNORECASE)
+            if m:
+                candidate = m.group(1).strip(" ?!.,")
+                candidate = re.sub(
+                    r"\b(còn không|con khong|còn ko|con ko|bao nhiêu|bao nhieu|không|khong|ko)\b.*$",
+                    "",
+                    candidate,
+                    flags=re.IGNORECASE,
+                ).strip(" ?!.,")
+                if candidate and candidate.lower() not in {"nao", "nào", "gi", "gì"}:
+                    actions.append(("get_item", candidate))
+                    break
+
+        alias = re.search(r"\b(GA\d+|BURGER|FRIES|PEPSI|SALAD|NUGGETS|CHEESE_BALLS)\b", user_input, flags=re.IGNORECASE)
+        if alias and not any(name == "get_item" for name, _ in actions):
+            actions.append(("get_item", alias.group(1).upper()))
+
+        # Freeship checks.
+        if any(k in lower for k in ["freeship", "miễn phí ship", "mien phi ship", "giao", "ship"]):
+            amount_match = re.search(r"(\d[\d\._]{4,})", user_input)
+            if amount_match:
+                amount = amount_match.group(1).replace(".", "").replace("_", "")
+                city = "Ha Noi"
+                if any(s in lower for s in ["tp.hcm", "hcm", "ho chi minh", "hồ chí minh", "sai gon", "sài gòn"]):
+                    city = "Ho Chi Minh"
+                elif any(s in lower for s in ["hà nội", "ha noi", "hanoi"]):
+                    city = "Ha Noi"
+                actions.append(("check_freeship", f"{amount},{city}"))
+
+        # Remove duplicates while keeping first occurrence order.
+        seen = set()
+        deduped: List[Tuple[str, str]] = []
+        for tool_name, args in actions:
+            key = (tool_name, args)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append((tool_name, args))
+        return deduped
+
+    def _enforce_business_rules_v2(
+        self,
+        final_answer: str,
+        latest_observations: Dict[str, Dict[str, Any]],
+        user_input: str,
+    ) -> str:
+        # Guard: Only enforce delivery restriction for out-of-Hanoi cities.
+        # Do NOT block orders under 200k - let the agent decide based on tool data.
+        freeship_obs = latest_observations.get("check_freeship")
+        if isinstance(freeship_obs, dict):
+            if freeship_obs.get("ok") and freeship_obs.get("deliverable") is False:
+                return "Xin lỗi, hiện nhà hàng chỉ giao trong Hà Nội nên chưa thể giao đến địa chỉ này."
+
+        # Additional hard guard for cross-city asks if model still claims deliverability.
+        lower = user_input.lower()
+        is_hcm = any(s in lower for s in ["tp.hcm", "hcm", "ho chi minh", "hồ chí minh", "sai gon", "sài gòn"])
+        if is_hcm and any(s in final_answer.lower() for s in ["giao được", "miễn phí giao", "giao hàng"]):
+            return "Xin lỗi, hiện nhà hàng chỉ giao trong Hà Nội nên chưa thể giao đến địa chỉ này."
+
+        return final_answer
+
+    def _execute_tool(self, tool_name: str, args: str) -> Dict[str, Any]:
+        """
+        Helper method to execute tools by name.
+        """
+        for tool in self.tools:
+            if tool["name"] == tool_name:
+                func = tool.get("func")
+                if not callable(func):
+                    return {
+                        "ok": False,
+                        "error": f"Tool {tool_name} is missing callable func.",
+                    }
+
+                try:
+                    output = func(args)
+                    if isinstance(output, dict):
+                        return output
+                    return {
+                        "ok": True,
+                        "result": output,
+                    }
+                except Exception as e:
+                    logger.log_event(
+                        "AGENT_TOOL_ERROR",
+                        {"tool": tool_name, "args": args, "error": str(e)},
+                    )
+                    return {
+                        "ok": False,
+                        "error": f"Tool execution failed: {e}",
+                    }
+
+        return {
+            "ok": False,
+            "error": f"Tool {tool_name} not found.",
         }
-    )
-
-    tools.append(
-        {
-            "name": "get_combo",
-            "description": "Tìm combo theo id hoặc tên (tiếng Việt).",
-            "func": menu_tool.get_combo,
-            "data": data_path,
-            "schema": {
-                "type": "function",
-                "function": {
-                    "name": "get_combo",
-                    "description": "Tìm combo theo id hoặc tên (tiếng Việt).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "combo_id": {"type": "string"},
-                            "name": {"type": "string"},
-                            "available_only": {"type": "boolean"},
-                        },
-                        "required": ["combo_id", "name", "available_only"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
-            },
-        }
-    )
-
-    tools.append(
-        {
-            "name": "get_discount",
-            "description": "Lấy mã giảm giá theo code hoặc danh sách mã giảm giá.",
-            "func": menu_tool.get_discount,
-            "data": data_path,
-            "schema": {
-                "type": "function",
-                "function": {
-                    "name": "get_discount",
-                    "description": "Lấy mã giảm giá theo code hoặc danh sách mã giảm giá.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string"},
-                            "active_only": {"type": "boolean"},
-                        },
-                        "required": ["code", "active_only"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
-            },
-        }
-    )
-
-    tools.append(
-        {
-            "name": "get_best_seller",
-            "description": "Lấy món bán chạy nhất.",
-            "func": menu_tool.get_best_seller,
-            "data": data_path,
-            "schema": {
-                "type": "function",
-                "function": {
-                    "name": "get_best_seller",
-                    "description": "Lấy món bán chạy nhất.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": [],
-                        "additionalProperties": False,
-                    },
-                    "additionalProperties": False,
-                    "strict": True,
-                },
-            },
-        }
-    )
-
-    tools.append(
-        {
-            "name": "compare_items_vs_combo",
-            "description": "So sánh giá món lẻ với combo, có xét giảm giá tốt nhất.",
-            "func": menu_tool.compare_items_vs_combo,
-            "data": data_path,
-            "schema": {
-                "type": "function",
-                "function": {
-                    "name": "compare_items_vs_combo",
-                    "description": "So sánh giá món lẻ với combo, có xét giảm giá tốt nhất.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "order_items": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "item_id": {"type": "string"},
-                                        "name": {"type": "string"},
-                                        "quantity": {"type": "integer"},
-                                    },
-                                    "required": ["item_id", "name", "quantity"],
-                                    "additionalProperties": False,
-                                },
-                            },
-                            "combo_id": {"type": "string"},
-                            "combo_quantity": {"type": "integer"},
-                        },
-                        "required": ["order_items", "combo_id", "combo_quantity"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
-            },
-        }
-    )
-
-    tools.append(
-        {
-            "name": "calculating_total_bill",
-            "description": "Tính tổng bill và tự chọn mã giảm giá tốt nhất.",
-            "func": menu_tool.calculating_total_bill,
-            "data": data_path,
-            "schema": {
-                "type": "function",
-                "function": {
-                    "name": "calculating_total_bill",
-                    "description": "Tính tổng bill và tự chọn mã giảm giá tốt nhất.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "order_items": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "item_id": {"type": "string"},
-                                        "name": {"type": "string"},
-                                        "quantity": {"type": "integer"},
-                                    },
-                                    "required": ["item_id", "name", "quantity"],
-                                    "additionalProperties": False,
-                                },
-                            },
-                            "order_combos": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "combo_id": {"type": "string"},
-                                        "name": {"type": "string"},
-                                        "quantity": {"type": "integer"},
-                                    },
-                                    "required": ["combo_id", "name", "quantity"],
-                                    "additionalProperties": False,
-                                },
-                            },
-                        },
-                        "required": ["order_items", "order_combos"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
-            },
-        }
-    )
-
-    return tools
